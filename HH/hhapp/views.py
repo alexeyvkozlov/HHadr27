@@ -36,6 +36,7 @@ def form(request):
 def result(request):
     print('gist')
     if request.method == 'POST':
+        print('='*70)
         print('post')
         form = UserReqForm(request.POST)
         if form.is_valid():
@@ -43,23 +44,57 @@ def result(request):
             where = form.cleaned_data['where']
             pages = form.cleaned_data['pages']
             # print(request.POST.getlist('areas'), request.POST.getlist('schedules'))
-            areas = [Area.objects.filter(id=it).first() for it in request.POST.getlist('areas')]
-            schedules = [Schedule.objects.filter(id=it).first() for it in request.POST.getlist('schedules')]
-            # print(areas, schedules, sep='\n')
+
+            #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            # areas = [Area.objects.filter(id=it).first() for it in request.POST.getlist('areas')]
+            # schedules = [Schedule.objects.filter(id=it).first() for it in request.POST.getlist('schedules')]
+            # # print(areas, schedules, sep='\n')
+            #~~~~~~~~~~~~~~~~~~~~~~~~
+            areas_ids = request.POST.getlist('areas')
+            schedules_ids = request.POST.getlist('schedules')
+            # Загрузка связанных объектов с помощью select_related
+            areas = Area.objects.filter(id__in=areas_ids).prefetch_related('vacancies')
+            schedules = Schedule.objects.filter(id__in=schedules_ids).prefetch_related('vacancies')
+            #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+            #~~~~~~~~~~~~~~~~~~~~~~~~
             com = Command(vac, pages, where, areas, schedules)
             com.handle()
             v = Word.objects.get(word=vac)
             s = Wordskill.objects.filter(id_word_id=v.id).order_by('-percent').all()
-            vac = Vacancy.active_objects.filter(word_id=v,
-                                                area__in=areas,
-                                                schedule__in=schedules).order_by('published').all()
-            print(vac, v, s, sep='\n')
+
+            #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            #~~~~~~~~~~~~~~~~~~~~~~~~
+            # vac = Vacancy.active_objects.filter(word_id=v,
+            #                                     area__in=areas,
+            #                                     schedule__in=schedules).order_by('published').all()
+            # vac = Vacancy.active_objects.all()
+            #~~~~~~~~~~~~~~~~~~~~~~~~
+            # Используем select_related для загрузки связанных объектов
+            # vac = Vacancy.active_objects.select_related('area', 'schedule')
+            vac = Vacancy.active_objects.filter(word_id=v).select_related('area', 'schedule')
+            #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+            
+            #~~~~~~~~~~~~~~~~~~~~~~~~
+            print('-'*70)
+            # print(vac, v, s, sep='\n')
+            print(f'Word-v: {v}')
+            # print(f'Wordskill-s: {s}')
+            # print(f'Vacancy-vac: {vac}')
+            print(f'Total vacancies: {vac.count()}')
+            #~~~~~~~~~~~~~~~~~~~~~~~~
+            print('-'*70)
             paginator = Paginator(vac, 10)
-            page_number = request.GET.get('page')
+            # page_number = request.GET.get('page')
+            page_number = request.GET.get('page', 1)  # Устанавливаем значение по умолчанию на 1
+            # print(f'page_number:{page_number}')    
             page_obj = paginator.get_page(page_number)
+            print(f'page_obj: len: {len(page_obj)}')    
+            print('='*70)
             return render(request, 'hhapp/about.html', context={'word': v,
                                                                 'skills': s,
                                                                 'page_obj': page_obj})
+            #~~~~~~~~~~~~~~~~~~~~~~~~
         else:
             page_number = request.GET.get('page')
             print('get', page_number)
@@ -113,22 +148,46 @@ class AreaPostMixin(ContextMixin):
             else:
                 url[item['name']] = item['id']
 
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    # def parce(self, area):
+    #     # r = {'url': 'https://api.superjob.ru/2.0/vacancies/',
+    #     #      'param': {'town': area,
+    #     #                'period': 1},
+    #     #      'header': {'X-Api-App-Id': os.getenv('key_super'),
+    #     #                 'Authorization': 'Bearer r.000000010000001.example.access_token',
+    #     #                 'Content-Type': 'application/x-www-form-urlencoded'}
+    #     #      }
+    #     self.hh, self.zarpl = dict(), dict()
+    #     for url, d in (('https://api.hh.ru/areas', self.hh), ('https://api.zarplata.ru/areas', self.zarpl)):
+    #         res = get(url).json()
+    #         self.prepare_area(d, res)
+    #     # res = get(r['url'], headers=r['header'], params=r['param']).json()
+    #     return {'name': area, 'ind_hh': self.hh.get(area, 0),
+    #             'ind_zarp': self.zarpl.get(area, 0)}#,
+    #             # 'ind_super': res['objects'][0]['town']['id'] if res['objects'] else 0}
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
     def parce(self, area):
-        # r = {'url': 'https://api.superjob.ru/2.0/vacancies/',
-        #      'param': {'town': area,
-        #                'period': 1},
-        #      'header': {'X-Api-App-Id': os.getenv('key_super'),
-        #                 'Authorization': 'Bearer r.000000010000001.example.access_token',
-        #                 'Content-Type': 'application/x-www-form-urlencoded'}
-        #      }
-        self.hh, self.zarpl = dict(), dict()
-        for url, d in (('https://api.hh.ru/areas', self.hh), ('https://api.zarplata.ru/areas', self.zarpl)):
+        # Инициализация словарей для хранения данных
+        self.hh, self.zarpl = {}, {}
+
+        # Словарь с URL-адресами API
+        api_urls = {
+            'hh': 'https://api.hh.ru/areas',
+            'zarpl': 'https://api.zarplata.ru/areas'
+        }
+
+        # Запросы к API для получения областей
+        for key, url in api_urls.items():
             res = get(url).json()
-            self.prepare_area(d, res)
-        # res = get(r['url'], headers=r['header'], params=r['param']).json()
-        return {'name': area, 'ind_hh': self.hh.get(area, 0),
-                'ind_zarp': self.zarpl.get(area, 0)}#,
-                # 'ind_super': res['objects'][0]['town']['id'] if res['objects'] else 0}
+            self.prepare_area(self.hh if key == 'hh' else self.zarpl, res)
+
+        # Возврат результатов
+        return {
+            'name': area,
+            'ind_hh': self.hh.get(area, 0),
+            'ind_zarp': self.zarpl.get(area, 0)
+        }
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
     def post(self, request, *args, **kwargs):
         text = request.POST['name']
